@@ -6,16 +6,26 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <math.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
 
 // Configurações Wi-Fi
-const char* ssid = "SSID";
-const char* password = "Senha";
+const char* ssid = "Felipe 2.4G";
+const char* password = "pretetis";
 
 // Configurações do servidor web para controle de LEDs
 WebServer server(80);
 const int ledPin1 = 27;
 const int ledPin2 = 26;
 const int ledPin3 = 25;
+
+// Configuração do cliente NTP
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", -10800); // Fuso horário de Brasília (UTC-3)
+
+// Variáveis para data/hora
+String formattedDate;
+String formattedTime;
 
 // Configurações do sensor DHT11
 #define DHTPIN 4
@@ -77,6 +87,35 @@ void readDHT() {
     Serial.println(temperatura);
     Serial.print("Umidade: ");
     Serial.println(umidade);
+
+    sendDHTData(temperatura, umidade);  // Envia os dados ao Flask
+  }
+}
+
+// Função de leitura do sensor DHT11 e envio para o servidor Flask
+void sendDHTData(float temperatura, float umidade) {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClient client;
+    HTTPClient http;
+
+    http.begin(client, serverName);
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+    String postData = "temperature=" + String(temperatura) + "&humidity=" + String(umidade);
+    
+    int httpResponseCode = http.POST(postData);
+
+    if (httpResponseCode > 0) {
+      Serial.print("Resposta do servidor: ");
+      Serial.println(httpResponseCode);
+    } else {
+      Serial.print("Erro na requisição HTTP: ");
+      Serial.println(httpResponseCode);
+    }
+
+    http.end();  // Fecha a conexão
+  } else {
+    Serial.println("Falha na conexão Wi-Fi.");
   }
 }
 
@@ -91,27 +130,29 @@ void readProximity() {
   duration = pulseIn(ECHO_PIN, HIGH);
   distance = duration * 0.034 / 2;
 
-  Serial.print("Distância: ");
-  Serial.print(distance);
-  Serial.println(" cm");
-
-  display.clearDisplay();
   if (distance < DISTANCE_THRESHOLD && distance > 0) {
     drawHappyFace();
   } else {
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 10);
-    display.println("Esperando movimento...");
-    display.display();
+    // Se a distância for maior que o limite, exibe os dados
+    float temperatura = dht.readTemperature();
+    float umidade = dht.readHumidity();
+    int soilMoistureValue = analogRead(soilMoisturePin);
+    int waterLevelValue = analogRead(waterLevelPin);
+
+    displayData(temperatura, umidade, soilMoistureValue, waterLevelValue, distance);
   }
 }
 
 void drawHappyFace() {
-  display.drawCircle(64, 32, 20, SSD1306_WHITE);
-  display.fillCircle(54, 26, 3, SSD1306_WHITE);
-  display.fillCircle(74, 26, 3, SSD1306_WHITE);
-  drawSmile(64, 42, 20, 10);
+  int centerX = 64; // Centro do rosto na horizontal
+  int centerY = 40; // Centro do rosto ajustado para a parte azul
+  int radius = 20;  // Raio do círculo
+
+  display.drawCircle(centerX, centerY, radius, SSD1306_WHITE);   // Cabeça
+  display.fillCircle(centerX - 10, centerY - 6, 3, SSD1306_WHITE); // Olho esquerdo
+  display.fillCircle(centerX + 10, centerY - 6, 3, SSD1306_WHITE); // Olho direito
+  drawSmile(centerX, centerY + 6, radius - 10, 5);               // Sorriso
+
   display.display();
 }
 
@@ -121,6 +162,44 @@ void drawSmile(int x, int y, int w, int h) {
     int y0 = y + (h / 2) * sin(radians(i));
     display.drawPixel(x0, y0, SSD1306_WHITE);
   }
+}
+
+void displayData(float temperatura, float umidade, int soilMoisture, int waterLevel, long distance) {
+  display.clearDisplay();
+
+    // Atualiza o horário via NTP
+  timeClient.update();
+  String currentTime = timeClient.getFormattedTime();
+
+  // Exibe o horário no topo do display (amarelo)
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);  // Posição inicial no canto superior esquerdo
+  display.print("Hora: ");
+  display.print(currentTime);
+  
+  // Exibe as informações na tela OLED
+  display.setTextSize(1);
+  display.setCursor(0, 16);
+  display.print("Temp: ");
+  display.print(temperatura);
+  display.print("C");
+
+  display.setCursor(0, 26);
+  display.print("Umid: ");
+  display.print(umidade);
+  display.print("%");
+
+  display.setCursor(0, 36);
+  display.print("Umid Solo: ");
+  display.print(soilMoisture);
+
+  display.setCursor(0, 46);
+  display.print("Nivel Agua: ");
+  display.print(waterLevel);
+
+
+  display.display();
 }
 
 // Função de leitura do sensor de umidade do solo
@@ -204,13 +283,29 @@ void setup() {
   server.on("/led2", handleLed2);
   server.on("/led3", handleLed3);
   server.begin();
+
+  // Inicializa o cliente NTP
+  timeClient.begin();
+  timeClient.update();
 }
 
 void loop() {
   server.handleClient();
-  readDHT();
+
+  // Lê os sensores
+  float temperatura = dht.readTemperature();
+  float umidade = dht.readHumidity();
+  int soilMoistureValue = analogRead(soilMoisturePin);
+  int waterLevelValue = analogRead(waterLevelPin);
+
+  // Atualiza os dados e exibe no display
   readProximity();
+  displayData(temperatura, umidade, soilMoistureValue, waterLevelValue, DISTANCE_THRESHOLD);
+
+  // Atualiza os dados do servidor
+  readDHT();
   readSoilMoisture();
   readWaterLevel();
-  delay(2000);
+
+  delay(5000); // Tempo entre atualizações
 }
