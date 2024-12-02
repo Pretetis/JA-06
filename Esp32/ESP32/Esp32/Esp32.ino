@@ -10,8 +10,8 @@
 #include <WiFiUdp.h>
 
 // Configurações Wi-Fi
-const char* ssid = "Felipe 2.4G";
-const char* password = "pretetis";
+const char* ssid = "SSID";
+const char* password = "SENHA";
 
 // Configurações do servidor web para controle de LEDs
 WebServer server(80);
@@ -120,27 +120,57 @@ void sendDHTData(float temperatura, float umidade) {
 }
 
 // Funções do sensor de proximidade
+unsigned long lastFaceDrawTime = 0;
+const unsigned long faceDisplayDuration = 5000; // 5 segundos
+
 void readProximity() {
-  long duration, distance;
-  digitalWrite(TRIGGER_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIGGER_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIGGER_PIN, LOW);
-  duration = pulseIn(ECHO_PIN, HIGH);
-  distance = duration * 0.034 / 2;
+    long duration, distance;
 
-  if (distance < DISTANCE_THRESHOLD && distance > 0) {
-    drawHappyFace();
-  } else {
-    // Se a distância for maior que o limite, exibe os dados
-    float temperatura = dht.readTemperature();
-    float umidade = dht.readHumidity();
-    int soilMoistureValue = analogRead(soilMoisturePin);
-    int waterLevelValue = analogRead(waterLevelPin);
+    // Mede a distância
+    digitalWrite(TRIGGER_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIGGER_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIGGER_PIN, LOW);
+    duration = pulseIn(ECHO_PIN, HIGH);
+    distance = duration * 0.034 / 2;
 
-    displayData(temperatura, umidade, soilMoistureValue, waterLevelValue, distance);
-  }
+    // Verifica a distância
+    if (distance < DISTANCE_THRESHOLD && distance > 0) {
+        // Loop para manter o rosto feliz enquanto a distância for menor que o limite
+        unsigned long startTime = millis();
+        while (true) {
+            // Recalcula a distância
+            digitalWrite(TRIGGER_PIN, LOW);
+            delayMicroseconds(2);
+            digitalWrite(TRIGGER_PIN, HIGH);
+            delayMicroseconds(10);
+            digitalWrite(TRIGGER_PIN, LOW);
+            duration = pulseIn(ECHO_PIN, HIGH);
+            distance = duration * 0.034 / 2;
+
+            // Se a distância ultrapassar o limite ou o tempo exceder o limite, sai do loop
+            if (distance >= DISTANCE_THRESHOLD || (millis() - startTime > faceDisplayDuration)) {
+                break;
+            }
+
+            // Exibe o rosto feliz
+            display.clearDisplay();
+            drawHappyFace();
+            display.display();
+
+            // Pequeno atraso para evitar sobrecarga
+            delay(100);
+        }
+    } else {
+        // Exibe os dados apenas se a distância estiver acima do limite
+        float temperatura = dht.readTemperature();
+        float umidade = dht.readHumidity();
+        int soilMoistureValue = analogRead(soilMoisturePin);
+        int waterLevelValue = analogRead(waterLevelPin);
+
+        displayData(temperatura, umidade, soilMoistureValue, waterLevelValue, distance);
+    }
 }
 
 void drawHappyFace() {
@@ -196,7 +226,7 @@ void displayData(float temperatura, float umidade, int soilMoisture, int waterLe
 
   display.setCursor(0, 46);
   display.print("Nivel Agua: ");
-  display.print(waterLevel);
+  display.print(String(waterLevel));
 
 
   display.display();
@@ -213,7 +243,7 @@ void readSoilMoisture() {
     if (client.connect(soilMoistureUrl, 80)) {
       String postData = "message=" + String(sensorValueAnalog);
       client.println("POST /data HTTP/1.1");
-      client.println("Host: 192.168.100.21");
+      client.println("Host: seuIP");
       client.println("Content-Type: application/x-www-form-urlencoded");
       client.print("Content-Length: ");
       client.println(postData.length());
@@ -235,7 +265,7 @@ void readWaterLevel() {
     if (client.connect(waterLevelUrl, 80)) {
       String postData = "waterLevel=" + String(waterLevel);
       client.println("POST /update HTTP/1.1");
-      client.println("Host: 192.168.100.21");
+      client.println("Host: seuIP");
       client.println("Content-Type: application/x-www-form-urlencoded");
       client.print("Content-Length: ");
       client.println(postData.length());
@@ -307,5 +337,5 @@ void loop() {
   readSoilMoisture();
   readWaterLevel();
 
-  delay(5000); // Tempo entre atualizações
+  delay(1000); // Tempo entre atualizações
 }
